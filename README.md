@@ -1,36 +1,42 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Domain Selector — Write-up
 
-## Getting Started
+## Stack Choice
 
-First, run the development server:
+I chose Next.js, TypeScript, Prisma, and PostgreSQL because the tool needs server-side workflows, database persistence, CSV processing, export routes, and a UI that can be deployed quickly.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Next.js App Router keeps the UI and API routes in one project. Prisma makes the database schema clear and maintainable.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## UX Decisions
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Dashboard-first workflow
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+I used a dashboard-first workflow instead of a strict wizard. This allows returning users to quickly reopen campaigns, review results, upload new vendors, or export shortlists.
 
-## Learn More
+### Separate qualified and disqualified domains
 
-To learn more about Next.js, take a look at the following resources:
+Disqualified domains are shown separately so users can trust why domains were rejected without mixing them into the shortlist.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Visible reasoning
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Each domain shows a total score, key metrics, reasoning summary, and score breakdown. This keeps the scoring understandable for non-technical users.
 
-## Deploy on Vercel
+### Config-driven scoring
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+The scoring configuration is stored in the database and loaded at runtime. This allows the team to update weights and rules without redeploying.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## What I Cut
+
+Given the time limit, I focused on the core repeatable workflow. Some polish items could be improved further:
+
+- Full spreadsheet template parity
+- More advanced filtering
+- Background scoring jobs
+- LLM-based niche matching
+
+## What I Would Improve Next
+
+- Add async scoring progress
+- Add better upload validation messages
+- Add full XLSX template matching
+- Add audit logs for config changes
+- Add richer admin editing for scoring config

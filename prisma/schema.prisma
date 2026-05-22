@@ -1,0 +1,92 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "windows"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Campaign {
+  id               String   @id @default(cuid())
+  clientName       String
+  clientNiche      String
+  budgetPerLink    Float
+  geoFocus         String
+  followPreference String
+  minDr            Int      @default(50)
+  minTraffic       Int      @default(3000)
+  linkCountGoal    Int
+  status           String   @default("draft")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  targetPages   TargetPage[]
+  vendorDomains VendorDomain[]
+  scoredDomains ScoredDomain[]
+}
+
+model TargetPage {
+  id             String   @id @default(cuid())
+  campaignId     String
+  targetUrl      String
+  primaryKeyword String
+  createdAt      DateTime @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model VendorDomain {
+  id                 String @id @default(cuid())
+  campaignId         String
+  domain             String
+  dr                 Int
+  traffic            Int
+  geo                String
+  price              Float
+  tat                String?
+  linkType           String
+  contactEmail       String?
+  mainNiche          String?
+  complementaryNiche String?
+  indirectNiche      String?
+  ranking            String?
+  redFlags           String?
+  rawJson            Json?
+
+  campaign      Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  scoredDomains ScoredDomain[]
+}
+
+model ScoringConfig {
+  id            String   @id @default(cuid())
+  version       Int
+  name          String
+  isActive      Boolean  @default(false)
+  weightsJson   Json
+  rulesJson     Json
+  promptsJson   Json?
+  overridesJson Json?
+  createdAt     DateTime @default(now())
+
+  scoredDomains ScoredDomain[]
+}
+
+model ScoredDomain {
+  id                      String   @id @default(cuid())
+  campaignId              String
+  vendorDomainId          String
+  scoringConfigId         String
+  score                   Float?
+  breakdownJson           Json?
+  reasoningSummary        String?
+  disqualified            Boolean  @default(false)
+  disqualificationReason  String?
+  included                Boolean  @default(true)
+  createdAt               DateTime @default(now())
+
+  campaign      Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  vendorDomain  VendorDomain  @relation(fields: [vendorDomainId], references: [id], onDelete: Cascade)
+  scoringConfig ScoringConfig @relation(fields: [scoringConfigId], references: [id])
+}

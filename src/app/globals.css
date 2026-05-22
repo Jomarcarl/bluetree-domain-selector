@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  background: black;
+}
+
+body {
+  background:
+    radial-gradient(
+      circle at top,
+      rgba(30, 41, 59, 0.25),
+      transparent 40%
+    ),
+    black;
+}
+
+* {
+  border-color: rgb(39 39 42);
+}
+
+input,
+select,
+textarea {
+  background: rgb(9 9 11);
+  border: 1px solid rgb(39 39 42);
+  color: white;
+}
+
+button {
+  transition: all 0.2s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
