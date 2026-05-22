@@ -2,15 +2,7 @@ import { prisma } from "@/lib/prisma";
 import Papa from "papaparse";
 import { redirect } from "next/navigation";
 
-type Weights = {
-  niche_match?: number;
-  domain_rating?: number;
-  traffic?: number;
-  price_efficiency?: number;
-  ranking_bonus?: number;
-  geo_match?: number;
-  no_red_flags?: number;
-};
+type Weights = Record<string, number>;
 
 export async function POST(
   request: Request,
@@ -30,17 +22,29 @@ export async function POST(
   const file = formData.get("file");
 
   if (!(file instanceof File) || file.size === 0) {
-    return Response.json(
-      { error: "Please choose a CSV file before uploading." },
-      { status: 400 }
-    );
+    return Response.json({ error: "Please choose a CSV file." }, { status: 400 });
   }
 
   const text = await file.text();
 
-  const parsed = Papa.parse<Record<string, string>>(text, {
+  const lines = text.split(/\r?\n/);
+  const headerIndex = lines.findIndex((line) =>
+    line.toLowerCase().startsWith("domain,")
+  );
+
+  if (headerIndex === -1) {
+    return Response.json(
+      { error: "Could not find vendor inventory header row starting with Domain." },
+      { status: 400 }
+    );
+  }
+
+  const cleanedCsv = lines.slice(headerIndex).join("\n");
+
+  const parsed = Papa.parse<Record<string, string>>(cleanedCsv, {
     header: true,
     skipEmptyLines: true,
+    transformHeader: (h) => h.trim(),
   });
 
   if (parsed.errors.length > 0) {
@@ -49,8 +53,6 @@ export async function POST(
       { status: 400 }
     );
   }
-
-  const rows = parsed.data;
 
   const config = await prisma.scoringConfig.findFirst({
     where: { isActive: true },
@@ -63,13 +65,27 @@ export async function POST(
 
   const weights = config.weightsJson as Weights;
 
-  for (const row of rows) {
-    const dr = Number(row.dr || row.DR || 0);
-    const traffic = Number(row.traffic || row.Traffic || 0);
-    const price = Number(row.price || row.Price || 0);
-    const ranking = String(row.ranking || row.Ranking || "").toLowerCase();
-    const linkType = String(row.link_type || row.linkType || "").toLowerCase();
-    const redFlags = String(row.red_flags || row.redFlags || "").trim();
+  await prisma.scoredDomain.deleteMany({ where: { campaignId: id } });
+  await prisma.vendorDomain.deleteMany({ where: { campaignId: id } });
+
+  let importedCount = 0;
+
+  for (const row of parsed.data) {
+    const domain = cleanDomain(getText(row, ["Domain"]));
+    if (!domain) continue;
+
+    const dr = getNumber(row, ["DR"]);
+    const traffic = getNumber(row, ["Traffic"]);
+    const price = getNumber(row, ["LI Price", "GP Price"]);
+    const geo = extractCountry(getText(row, ["Country. Traffic"])) || campaign.geoFocus || "global";
+    const linkType = normalizeLinkType(getText(row, ["Link Type"]));
+    const ranking = normalizeRanking(getText(row, ["Ranking"]));
+    const redFlags = getText(row, ["Red Flags"]);
+    const tat = getText(row, ["TAT"]);
+    const contactEmail = getText(row, ["Contact"]);
+    const mainNiche = getText(row, ["Main", "Niche"]);
+    const complementaryNiche = getText(row, ["Complementary"]);
+    const indirectNiche = getText(row, ["Indirect"]);
 
     let disqualified = false;
     let disqualificationReason = "";
@@ -97,43 +113,58 @@ export async function POST(
       disqualificationReason = "Ranking marked Poor or Bad";
     }
 
-    const nicheScore = getNicheScore(campaign.clientNiche, row, weights.niche_match ?? 40);
+    const nicheScore = getNicheScore(
+      campaign.clientNiche,
+      {
+        main_niche: mainNiche,
+        complementary_niche: complementaryNiche,
+        indirect_niche: indirectNiche,
+        domain,
+      },
+      weights.niche_match ?? weights.NicheMatch ?? 40
+    );
+
+    const drWeight = weights.domain_rating ?? weights.dr ?? weights.Dr ?? 15;
+    const trafficWeight = weights.traffic ?? weights.Traffic ?? 15;
+    const priceWeight = weights.price_efficiency ?? weights.price ?? weights.Price ?? 10;
+    const rankingWeight = weights.ranking_bonus ?? weights.ranking ?? weights.Ranking ?? 10;
+    const geoWeight = weights.geo_match ?? weights.geo ?? weights.Geo ?? 5;
+    const redFlagWeight = weights.no_red_flags ?? weights.redFlags ?? weights.RedFlags ?? 5;
 
     const drScore = Math.min(
-      weights.domain_rating ?? weights.dr ?? 15,
-      ((dr - campaign.minDr) / 50) * (weights.domain_rating ?? weights.dr ?? 15)
+      drWeight,
+      Math.max(0, ((dr - campaign.minDr) / 50) * drWeight)
     );
 
     const trafficScore = Math.min(
-      weights.traffic ?? 15,
-      Math.log10(traffic / campaign.minTraffic + 1) * (weights.traffic ?? 15)
+      trafficWeight,
+      Math.max(0, Math.log10(traffic / campaign.minTraffic + 1) * trafficWeight)
     );
 
     const priceScore =
       price <= campaign.budgetPerLink
-        ? weights.price_efficiency ?? weights.price ?? 10
+        ? priceWeight
         : Math.max(
             0,
-            (weights.price_efficiency ?? weights.price ?? 10) -
+            priceWeight -
               ((price - campaign.budgetPerLink) / campaign.budgetPerLink) *
-                (weights.price_efficiency ?? weights.price ?? 10)
+                priceWeight
           );
 
     const rankingScore =
       ranking === "good"
-        ? weights.ranking_bonus ?? weights.ranking ?? 10
+        ? rankingWeight
         : ranking === "okay"
-        ? (weights.ranking_bonus ?? weights.ranking ?? 10) / 2
+        ? rankingWeight / 2
         : 0;
 
     const geoScore =
       campaign.geoFocus.toLowerCase() === "global" ||
-      String(row.geo || "").toLowerCase().includes(campaign.geoFocus.toLowerCase())
-        ? weights.geo_match ?? weights.geo ?? 5
+      geo.toLowerCase().includes(campaign.geoFocus.toLowerCase())
+        ? geoWeight
         : 0;
 
-    const redFlagScore =
-      redFlags.length === 0 ? weights.no_red_flags ?? weights.redFlags ?? 5 : 0;
+    const redFlagScore = redFlags.length === 0 ? redFlagWeight : 0;
 
     const breakdown = {
       niche_match: Math.max(0, nicheScore),
@@ -152,19 +183,19 @@ export async function POST(
     const vendorDomain = await prisma.vendorDomain.create({
       data: {
         campaignId: id,
-        domain: row.domain || "",
+        domain,
         dr,
         traffic,
-        geo: row.geo || "",
+        geo,
         price,
-        tat: row.tat || "",
-        linkType: row.link_type || "",
-        contactEmail: row.contact_email || "",
-        mainNiche: row.main_niche || "",
-        complementaryNiche: row.complementary_niche || "",
-        indirectNiche: row.indirect_niche || "",
-        ranking: row.ranking || "",
-        redFlags: row.red_flags || "",
+        tat,
+        linkType,
+        contactEmail,
+        mainNiche,
+        complementaryNiche,
+        indirectNiche,
+        ranking,
+        redFlags,
         rawJson: row,
       },
     });
@@ -184,9 +215,77 @@ export async function POST(
         breakdownJson: breakdown,
       },
     });
+
+    importedCount++;
+  }
+
+  if (importedCount === 0) {
+    return Response.json(
+      { error: "No domain rows imported." },
+      { status: 400 }
+    );
   }
 
   redirect(`/campaigns/${id}/results`);
+}
+
+function getText(row: Record<string, string>, keys: string[]) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return String(value).trim();
+    }
+  }
+  return "";
+}
+
+function getNumber(row: Record<string, string>, keys: string[]) {
+  const value = getText(row, keys);
+  if (!value || value === "-") return 0;
+
+  return (
+    Number(
+      value
+        .replaceAll("$", "")
+        .replaceAll(",", "")
+        .replaceAll("%", "")
+        .trim()
+    ) || 0
+  );
+}
+
+function cleanDomain(value: string) {
+  return value
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0]
+    .trim()
+    .toLowerCase();
+}
+
+function extractCountry(value: string) {
+  const match = value.match(/\(([^,]+),/);
+  return match?.[1]?.trim().toUpperCase() || "";
+}
+
+function normalizeLinkType(value: string) {
+  const text = value.toLowerCase();
+
+  if (text.includes("nofollow")) return "nofollow";
+  if (text.includes("li")) return "dofollow";
+  if (text.includes("gp")) return "dofollow";
+
+  return "dofollow";
+}
+
+function normalizeRanking(value: string) {
+  const text = value.toLowerCase();
+
+  if (text.includes("poor") || text.includes("bad")) return "poor";
+  if (text.includes("good")) return "good";
+  if (text.includes("okay")) return "okay";
+
+  return "okay";
 }
 
 function getNicheScore(
@@ -217,7 +316,7 @@ function getNicheScore(
 function normalize(text: string) {
   return text
     .toLowerCase()
-    .split(/[\s,;/|.-]+/)
+    .split(/[\s,;/|.\-↔️⬆️⬇️]+/)
     .map((word) => word.trim())
     .filter((word) => word.length > 2);
 }
